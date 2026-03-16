@@ -155,6 +155,7 @@ const MARKET_DATA = {
    =================================================================== */
 const getLayoutSize = (l) => ["ワンルーム","1K","1DK"].includes(l) ? "small" : "large";
 const getCapacity = (l) => ({"ワンルーム":2,"1K":2,"1DK":2,"1LDK":3,"2K":3,"2DK":4,"2LDK":5,"3K":4,"3DK":5,"3LDK":7,"4LDK以上":9})[l]||4;
+const N = (v) => Number(v) || 0;  // 空文字やundefinedを安全に0に変換
 const fmt = (n) => (n==null||isNaN(n)) ? "—" : Math.round(n).toLocaleString("ja-JP");
 const fmtMan = (n) => (n==null||isNaN(n)) ? "—" : (n/10000).toFixed(1)+"万";
 const fmtMonth = (n) => { if(!n||n<=0) return "—"; const y=Math.floor(n/12),m=Math.round(n%12); return y===0?`${m}ヶ月`:m===0?`${y}年`:`${y}年${m}ヶ月`; };
@@ -322,16 +323,16 @@ function MinpakuSimulator() {
     const muni=MUNICIPALITIES.find(m=>m.id===legal.municipality)||MUNICIPALITIES[0];
     const isRes=legal.zone.includes("teiso")||legal.zone.includes("chukoso");
     let mDays=muni.minpakuDays||180; if(isRes&&muni.residentialDays) mDays=muni.residentialDays;
-    const init=(prop.propertyType==="purchase"?prop.purchasePrice:0)+prop.renovationCost+prop.furnitureCost+prop.otherInitialCost;
+    const init=N(prop.propertyType==="purchase"?prop.purchasePrice:0)+N(prop.renovationCost)+N(prop.furnitureCost)+N(prop.otherInitialCost);
 
     // 固定費の内訳
     const fixedDetail = {
-      rentOrLoan: prop.propertyType==="rent" ? prop.monthlyRent : prop.monthlyLoan,
+      rentOrLoan: N(prop.propertyType==="rent" ? prop.monthlyRent : prop.monthlyLoan),
       rentOrLoanLabel: prop.propertyType==="rent" ? "家賃" : "ローン返済",
-      management: prop.monthlyManagement,
-      utilities: prop.monthlyUtilities,
-      insurance: prop.monthlyInsurance,
-      other: prop.monthlyOther,
+      management: N(prop.monthlyManagement),
+      utilities: N(prop.monthlyUtilities),
+      insurance: N(prop.monthlyInsurance),
+      other: N(prop.monthlyOther),
     };
     const mFix = fixedDetail.rentOrLoan + fixedDetail.management + fixedDetail.utilities + fixedDetail.insurance + fixedDetail.other;
     const aFix=mFix*12;
@@ -345,19 +346,19 @@ function MinpakuSimulator() {
      */
     const calc = (days) => (rate) => {
       const occ = Math.round(days * rate);
-      const turns = Math.ceil(occ / Math.max(prop.avgStayLength, 1));
+      const turns = Math.ceil(occ / Math.max(N(prop.avgStayLength), 1));
 
       // --- 売上の内訳 ---
-      const stayRevenue = occ * prop.nightlyRate;                // 宿泊料収入
-      const cleaningRevenue = turns * prop.guestCleaningFee;     // ゲスト清掃費収入（1滞在あたり）
-      const grossRevenue = stayRevenue + cleaningRevenue;        // 売上合計（税前）
-      const commission = grossRevenue * (prop.commissionRate / 100); // OTA手数料
-      const netRevenue = grossRevenue - commission;              // 純売上（手数料控除後）
+      const stayRevenue = occ * N(prop.nightlyRate);                // 宿泊料収入
+      const cleaningRevenue = turns * N(prop.guestCleaningFee);     // ゲスト清掃費収入（1滞在あたり）
+      const grossRevenue = stayRevenue + cleaningRevenue;           // 売上合計（税前）
+      const commission = grossRevenue * (N(prop.commissionRate) / 100); // OTA手数料
+      const netRevenue = grossRevenue - commission;                 // 純売上（手数料控除後）
 
       // --- 変動費の内訳 ---
-      const cleaningExpense = turns * prop.cleaningFee;          // チェックアウト清掃費
-      const linenExpense = turns * prop.linenFee;                // リネン費
-      const consumablesExpense = turns * prop.consumablesFee;    // 消耗品費
+      const cleaningExpense = turns * N(prop.cleaningFee);          // チェックアウト清掃費
+      const linenExpense = turns * N(prop.linenFee);                // リネン費
+      const consumablesExpense = turns * N(prop.consumablesFee);    // 消耗品費
       const totalVariableCost = cleaningExpense + linenExpense + consumablesExpense;
 
       // --- 利益 ---
@@ -384,41 +385,41 @@ function MinpakuSimulator() {
     // 損益分岐点
     const be = (days) => {
       // 1泊あたり純収入を計算
-      const avgStay = Math.max(prop.avgStayLength, 1);
-      const revenuePerNight = prop.nightlyRate + prop.guestCleaningFee / avgStay;
-      const netPerNight = revenuePerNight * (1 - prop.commissionRate / 100);
-      const vcPerNight = (prop.cleaningFee + prop.linenFee + prop.consumablesFee) / avgStay;
+      const avgStay = Math.max(N(prop.avgStayLength), 1);
+      const revenuePerNight = N(prop.nightlyRate) + N(prop.guestCleaningFee) / avgStay;
+      const netPerNight = revenuePerNight * (1 - N(prop.commissionRate) / 100);
+      const vcPerNight = (N(prop.cleaningFee) + N(prop.linenFee) + N(prop.consumablesFee)) / avgStay;
       const profitPerNight = netPerNight - vcPerNight;
       if (profitPerNight <= 0) return null;
       const b = aFix / (profitPerNight * days);
       return b <= 1 ? b : null;
     };
 
-    const gy = prop.propertyType === "purchase" && prop.purchasePrice > 0
-      ? ((prop.nightlyRate + prop.guestCleaningFee / Math.max(prop.avgStayLength, 1)) * 365 * 0.6 / prop.purchasePrice * 100)
+    const gy = prop.propertyType === "purchase" && N(prop.purchasePrice) > 0
+      ? ((N(prop.nightlyRate) + N(prop.guestCleaningFee) / Math.max(N(prop.avgStayLength), 1)) * 365 * 0.6 / N(prop.purchasePrice) * 100)
       : null;
 
     // 月別計算
     const monthly = prop.useMonthlyMode ? DAYS_IN_MONTH.map((days, i) => {
-      const rate = (prop.monthlyOccupancy[i] || 70) / 100;
-      const nRate = prop.monthlyNightlyRate ? prop.monthlyNightlyRate[i] : prop.nightlyRate;
+      const rate = (N(prop.monthlyOccupancy[i]) || 70) / 100;
+      const nRate = prop.monthlyNightlyRate ? N(prop.monthlyNightlyRate[i]) : N(prop.nightlyRate);
       const occ = Math.round(days * rate);
-      const turns = Math.ceil(occ / Math.max(prop.avgStayLength, 1));
+      const turns = Math.ceil(occ / Math.max(N(prop.avgStayLength), 1));
 
-      const stayRevenue = occ * nRate;
-      const cleaningRevenue = turns * prop.guestCleaningFee;
+      const stayRevenue = occ * N(nRate);
+      const cleaningRevenue = turns * N(prop.guestCleaningFee);
       const grossRevenue = stayRevenue + cleaningRevenue;
-      const commission = grossRevenue * (prop.commissionRate / 100);
+      const commission = grossRevenue * (N(prop.commissionRate) / 100);
       const netRevenue = grossRevenue - commission;
 
-      const cleaningExpense = turns * prop.cleaningFee;
-      const linenExpense = turns * prop.linenFee;
-      const consumablesExpense = turns * prop.consumablesFee;
+      const cleaningExpense = turns * N(prop.cleaningFee);
+      const linenExpense = turns * N(prop.linenFee);
+      const consumablesExpense = turns * N(prop.consumablesFee);
       const totalVariableCost = cleaningExpense + linenExpense + consumablesExpense;
 
       const profit = netRevenue - totalVariableCost - mFix;
       return {
-        month: i+1, label: MONTH_LABELS[i], days, rate: prop.monthlyOccupancy[i],
+        month: i+1, label: MONTH_LABELS[i], days, rate: N(prop.monthlyOccupancy[i]),
         occ, turns, nRate,
         stayRevenue, cleaningRevenue, grossRevenue, commission, netRevenue,
         cleaningExpense, linenExpense, consumablesExpense, totalVariableCost,
