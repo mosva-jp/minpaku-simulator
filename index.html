@@ -255,6 +255,7 @@ function MinpakuSimulator() {
   const [prop, setProp] = useState({
     address:"", layout:"1LDK", capacity:4,
     propertyType:"rent", purchasePrice:0, monthlyRent:100000,
+    brokerageFee:0, registrationFee:200000, acquisitionTax:100000, initialInsurance:80000, propertyTaxProration:30000,
     renovationCost:500000, furnitureCost:500000, otherInitialCost:200000, monthlyLoan:0,
     monthlyManagement:10000, monthlyUtilities:15000, monthlyInsurance:5000, monthlyOther:5000,
     cleaningFee:5000, linenFee:2000, consumablesFee:1000,
@@ -306,6 +307,16 @@ function MinpakuSimulator() {
   },[prop.address]);
   useEffect(()=>{ if(prop.address.trim().length>=4){const t=setTimeout(geocode,800);return()=>clearTimeout(t);} },[prop.address,geocode]);
 
+  // --- 購入価格→仲介手数料自動計算（手動変更フラグで制御） ---
+  const [brokerageManual, setBrokerageManual] = useState(false);
+  useEffect(()=>{
+    if(!brokerageManual && prop.propertyType==="purchase" && N(prop.purchasePrice)>0){
+      const price=N(prop.purchasePrice);
+      const fee = price>4000000 ? Math.floor(price*0.03+60000) : price>2000000 ? Math.floor(price*0.04+20000) : Math.floor(price*0.05);
+      setProp(p=>({...p, brokerageFee:fee}));
+    }
+  },[prop.purchasePrice, prop.propertyType, brokerageManual]);
+
   // --- 間取り→定員 + 相場再適用 ---
   useEffect(()=>{
     setProp(p=>({...p,capacity:getCapacity(p.layout)}));
@@ -324,7 +335,9 @@ function MinpakuSimulator() {
     const muni=MUNICIPALITIES.find(m=>m.id===legal.municipality)||MUNICIPALITIES[0];
     const isRes=legal.zone.includes("teiso")||legal.zone.includes("chukoso");
     let mDays=muni.minpakuDays||180; if(isRes&&muni.residentialDays) mDays=muni.residentialDays;
-    const init=N(prop.propertyType==="purchase"?prop.purchasePrice:0)+N(prop.renovationCost)+N(prop.furnitureCost)+N(prop.otherInitialCost)+N(prop.setupDesignCost)+N(prop.setupFurnishingCost)+N(prop.setupPermitCost);
+    // 購入諸費用
+    const purchaseCosts = prop.propertyType==="purchase" ? N(prop.brokerageFee)+N(prop.registrationFee)+N(prop.acquisitionTax)+N(prop.initialInsurance)+N(prop.propertyTaxProration) : 0;
+    const init=N(prop.propertyType==="purchase"?prop.purchasePrice:0)+purchaseCosts+N(prop.renovationCost)+N(prop.furnitureCost)+N(prop.otherInitialCost)+N(prop.setupDesignCost)+N(prop.setupFurnishingCost)+N(prop.setupPermitCost);
 
     // 固定費の内訳
     const fixedDetail = {
@@ -534,7 +547,7 @@ function MinpakuSimulator() {
     const row=(s,t,c)=>`<tr><td>${s.rate}%</td><td>${s[t].occupied}日</td><td>${fmt(s[t].grossRevenue)}円</td><td>${fmt(s[t].commission)}円</td><td>${fmt(s[t].managementFee)}円</td><td>${fmt(s[t].totalVariableCost)}円</td><td style="font-weight:700;color:${s[t].profit>=0?c:'#dc2626'}">${fmt(s[t].profit)}円</td><td>${s[t].grossYield?s[t].grossYield.toFixed(1)+'%':'—'}</td><td style="font-weight:700">${s[t].netYield?s[t].netYield.toFixed(1)+'%':'—'}</td><td>${s[t].payback?fmtMonth(s[t].payback*12):'—'}</td></tr>`;
     const html=`<!DOCTYPE html><html><head><meta charset="utf-8"><title>民泊シミュレーション</title><style>body{font-family:'Hiragino Sans','Yu Gothic',sans-serif;margin:30px 40px;color:#1e293b;font-size:13px;line-height:1.6}h1{font-size:18px;border-bottom:2px solid #3b82f6;padding-bottom:8px}h2{font-size:14px;margin-top:22px;color:#1e40af;border-left:4px solid #3b82f6;padding-left:8px}table{width:100%;border-collapse:collapse;margin:8px 0 14px;font-size:11px}th,td{border:1px solid #e2e8f0;padding:5px 8px;text-align:right}th{background:#f8fafc;text-align:center}td:first-child{text-align:center;font-weight:600}.g{display:grid;grid-template-columns:1fr 1fr;gap:4px 20px;margin:8px 0}.gi{display:flex;justify-content:space-between;border-bottom:1px dotted #e2e8f0;padding:3px 0}.gl{color:#64748b}.gv{font-weight:600}.n{background:#fffbeb;border:1px solid #fde68a;border-radius:6px;padding:8px 12px;margin:8px 0;font-size:11px}.ft{margin-top:28px;border-top:1px solid #e2e8f0;padding-top:8px;font-size:10px;color:#94a3b8;text-align:center}@media print{body{margin:15px 20px}}</style></head><body>
 <h1>民泊物件 シミュレーション結果</h1><p style="color:#64748b;font-size:11px">作成日: ${new Date().toLocaleDateString('ja-JP')}</p>
-<h2>物件情報</h2><div class="g"><div class="gi"><span class="gl">住所</span><span class="gv">${prop.address||'未入力'}</span></div><div class="gi"><span class="gl">間取り/定員</span><span class="gv">${prop.layout}/${prop.capacity}人</span></div><div class="gi"><span class="gl">形態</span><span class="gv">${prop.propertyType==='rent'?'賃貸':'購入'}</span></div><div class="gi"><span class="gl">${prop.propertyType==='rent'?'家賃':'購入価格'}</span><span class="gv">${prop.propertyType==='rent'?fmt(prop.monthlyRent)+'円/月':fmt(prop.purchasePrice)+'円'}</span></div><div class="gi"><span class="gl">初期投資</span><span class="gv">${fmt(R.init)}円</span></div><div class="gi"><span class="gl">固定費</span><span class="gv">${fmt(R.mFix)}円/月</span></div><div class="gi"><span class="gl">宿泊単価</span><span class="gv">${fmt(prop.nightlyRate)}円/泊</span></div><div class="gi"><span class="gl">清掃費（経費）</span><span class="gv">${fmt(prop.cleaningFee)}円/回</span></div><div class="gi"><span class="gl">清掃費（ゲスト徴収）</span><span class="gv">${fmt(prop.guestCleaningFee)}円/滞在</span></div><div class="gi"><span class="gl">運営代行費率</span><span class="gv">${prop.managementFeeRate}%</span></div><div class="gi"><span class="gl">立ち上げ費用（デザイン）</span><span class="gv">${fmt(prop.setupDesignCost)}円</span></div><div class="gi"><span class="gl">立ち上げ費用（設営）</span><span class="gv">${fmt(prop.setupFurnishingCost)}円</span></div><div class="gi"><span class="gl">立ち上げ費用（許認可）</span><span class="gv">${fmt(prop.setupPermitCost)}円</span></div><div class="gi"><span class="gl">用途地域</span><span class="gv">${LR.zone?.label||'未選択'}</span></div><div class="gi"><span class="gl">自治体</span><span class="gv">${LR.muni.label}</span></div></div>
+<h2>物件情報</h2><div class="g"><div class="gi"><span class="gl">住所</span><span class="gv">${prop.address||'未入力'}</span></div><div class="gi"><span class="gl">間取り/定員</span><span class="gv">${prop.layout}/${prop.capacity}人</span></div><div class="gi"><span class="gl">形態</span><span class="gv">${prop.propertyType==='rent'?'賃貸':'購入'}</span></div><div class="gi"><span class="gl">${prop.propertyType==='rent'?'家賃':'購入価格'}</span><span class="gv">${prop.propertyType==='rent'?fmt(prop.monthlyRent)+'円/月':fmt(prop.purchasePrice)+'円'}</span></div><div class="gi"><span class="gl">初期投資</span><span class="gv">${fmt(R.init)}円</span></div>${prop.propertyType==='purchase'?`<div class="gi"><span class="gl">購入諸費用内訳</span><span class="gv">仲介${fmt(prop.brokerageFee)}円／登記${fmt(prop.registrationFee)}円／取得税${fmt(prop.acquisitionTax)}円／保険${fmt(prop.initialInsurance)}円／精算金${fmt(prop.propertyTaxProration)}円</span></div>`:''}<div class="gi"><span class="gl">固定費</span><span class="gv">${fmt(R.mFix)}円/月</span></div><div class="gi"><span class="gl">宿泊単価</span><span class="gv">${fmt(prop.nightlyRate)}円/泊（1人あたり約${fmt(Math.round(N(prop.nightlyRate)/Math.max(N(prop.capacity),1)))}円）</span></div><div class="gi"><span class="gl">清掃費（経費）</span><span class="gv">${fmt(prop.cleaningFee)}円/回</span></div><div class="gi"><span class="gl">清掃費（ゲスト徴収）</span><span class="gv">${fmt(prop.guestCleaningFee)}円/滞在</span></div><div class="gi"><span class="gl">運営代行費率</span><span class="gv">${prop.managementFeeRate}%</span></div><div class="gi"><span class="gl">立ち上げ費用（デザイン）</span><span class="gv">${fmt(prop.setupDesignCost)}円</span></div><div class="gi"><span class="gl">立ち上げ費用（設営）</span><span class="gv">${fmt(prop.setupFurnishingCost)}円</span></div><div class="gi"><span class="gl">立ち上げ費用（許認可）</span><span class="gv">${fmt(prop.setupPermitCost)}円</span></div><div class="gi"><span class="gl">用途地域</span><span class="gv">${LR.zone?.label||'未選択'}</span></div><div class="gi"><span class="gl">自治体</span><span class="gv">${LR.muni.label}</span></div></div>
 <h2>経費内訳</h2>
 <table><tr style="background:#f8fafc;font-size:11px"><th colspan="2">固定費（月額）</th></tr>
 <tr><td style="text-align:left">${R.fixedDetail.rentOrLoanLabel}</td><td>${fmt(R.fixedDetail.rentOrLoan)}円</td></tr>
@@ -647,7 +660,18 @@ ${R.exitStrategy.map(r=>{const m3=r.mult.find(x=>x.m===3);const m5=r.mult.find(x
             {prop.propertyType==="purchase"?<><Field label="物件購入価格" value={prop.purchasePrice} onChange={v=>up("purchasePrice",v)} unit="円" /><Field label="月々のローン返済額" value={prop.monthlyLoan} onChange={v=>up("monthlyLoan",v)} unit="円/月" /></>:<Field label="月額家賃" value={prop.monthlyRent} onChange={v=>up("monthlyRent",v)} unit="円/月" />}
             <Field label="リフォーム・内装費" value={prop.renovationCost} onChange={v=>up("renovationCost",v)} unit="円" />
             <Field label="家具・備品費" value={prop.furnitureCost} onChange={v=>up("furnitureCost",v)} unit="円" />
-            <Field label="その他初期費用" value={prop.otherInitialCost} onChange={v=>up("otherInitialCost",v)} unit="円" help="仲介手数料、保証金、届出費用など" />
+            <Field label="その他初期費用" value={prop.otherInitialCost} onChange={v=>up("otherInitialCost",v)} unit="円" help="保証金など" />
+            {prop.propertyType==="purchase"&&<div className="md:col-span-2 mt-3 p-3 bg-amber-50 rounded-xl border border-amber-200">
+              <p className="text-xs font-bold text-amber-700 mb-2">購入諸費用</p>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-x-6">
+                <Field label="仲介手数料" value={prop.brokerageFee} onChange={v=>{setBrokerageManual(true);up("brokerageFee",v)}} unit="円" help={brokerageManual?"手動入力中（自動計算に戻すには0を入力後価格を再入力）":"物件価格から自動計算（手動変更可）"} />
+                <Field label="登記費用" value={prop.registrationFee} onChange={v=>up("registrationFee",v)} unit="円" help="所有権移転登記・司法書士報酬" />
+                <Field label="不動産取得税" value={prop.acquisitionTax} onChange={v=>up("acquisitionTax",v)} unit="円" help="取得後3〜6ヶ月後に課税" />
+                <Field label="火災保険（初年度）" value={prop.initialInsurance} onChange={v=>up("initialInsurance",v)} unit="円" help="民泊用の火災保険" />
+                <Field label="固定資産税精算金" value={prop.propertyTaxProration} onChange={v=>up("propertyTaxProration",v)} unit="円" help="売主との日割り精算分" />
+              </div>
+              <div className="mt-2 px-3 py-1.5 bg-amber-100 rounded-lg"><p className="text-xs text-amber-800">購入諸費用 小計: <span className="font-bold">{fmt(N(prop.brokerageFee)+N(prop.registrationFee)+N(prop.acquisitionTax)+N(prop.initialInsurance)+N(prop.propertyTaxProration))}円</span></p></div>
+            </div>}
             <div className="md:col-span-2 mt-3 p-3 bg-violet-50 rounded-xl border border-violet-200">
               <p className="text-xs font-bold text-violet-700 mb-2">立ち上げ費用（MOSVA）</p>
               <div className="grid grid-cols-1 md:grid-cols-3 gap-x-6">
@@ -1129,6 +1153,7 @@ ${R.exitStrategy.map(r=>{const m3=r.mult.find(x=>x.m===3);const m5=r.mult.find(x
 
         <div className="bg-gray-50 rounded-xl p-4 mb-5 text-xs text-gray-500 space-y-1">
           <p className="font-semibold text-gray-600">計算前提</p>
+          <p className="font-semibold text-gray-700">物件想定 = {prop.layout} / 定員{prop.capacity}名 / 一棟貸し {fmt(prop.nightlyRate)}円/泊（1人あたり約{fmt(Math.round(N(prop.nightlyRate) / Math.max(N(prop.capacity), 1)))}円/泊）</p>
           <p>売上 = 宿泊料（稼働日数 x 宿泊単価）＋ ゲスト清掃費（ターン数 x {fmt(prop.guestCleaningFee)}円）</p>
           <p>OTA手数料 = 売上合計 x {prop.commissionRate}%</p>
           <p>運営代行費 = （売上 - OTA手数料）x {prop.managementFeeRate}%</p>
