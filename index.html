@@ -596,7 +596,7 @@ ${LR.muni.restriction?`<div class="n"><strong>${LR.muni.label}:</strong> ${LR.mu
             <Field label="家具・備品費" value={prop.furnitureCost} onChange={v=>up("furnitureCost",v)} unit="円" />
             <Field label="その他初期費用" value={prop.otherInitialCost} onChange={v=>up("otherInitialCost",v)} unit="円" help="仲介手数料、保証金、届出費用など" />
             <div className="md:col-span-2 mt-3 p-3 bg-violet-50 rounded-xl border border-violet-200">
-              <p className="text-xs font-bold text-violet-700 mb-2">立ち上げ費用（Minpaku One）</p>
+              <p className="text-xs font-bold text-violet-700 mb-2">立ち上げ費用（MOSVA）</p>
               <div className="grid grid-cols-1 md:grid-cols-3 gap-x-6">
                 <Field label="デザイン費" value={prop.setupDesignCost} onChange={v=>up("setupDesignCost",v)} unit="円" help="インテリアデザイン・コーディネート" />
                 <Field label="設営費" value={prop.setupFurnishingCost} onChange={v=>up("setupFurnishingCost",v)} unit="円" help="家具搬入・設置・スタイリング" />
@@ -631,7 +631,7 @@ ${LR.muni.restriction?`<div class="n"><strong>${LR.muni.label}:</strong> ${LR.mu
             <Field label="リネン費（1回）" value={prop.linenFee} onChange={v=>up("linenFee",v)} unit="円/回" />
             <Field label="消耗品費（1回）" value={prop.consumablesFee} onChange={v=>up("consumablesFee",v)} unit="円/回" help="アメニティ等" />
             <Field label="OTA手数料率" value={prop.commissionRate} onChange={v=>up("commissionRate",v)} unit="%" help="Airbnb: 約3% / Booking.com: 約15%。売上全体（宿泊料＋清掃費）に対して課されます" />
-            <Field label="運営代行手数料率" value={prop.managementFeeRate} onChange={v=>up("managementFeeRate",v)} unit="%" help="売上からOTA手数料を引いた金額に対して課されます（Minpaku One運営代行）" />
+            <Field label="運営代行手数料率" value={prop.managementFeeRate} onChange={v=>up("managementFeeRate",v)} unit="%" help="売上からOTA手数料を引いた金額に対して課されます（MOSVA運営代行）" />
           </div>
         </Card>
 
