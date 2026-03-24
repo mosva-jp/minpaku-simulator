@@ -158,7 +158,7 @@ const getCapacity = (l) => ({"ワンルーム":2,"1K":2,"1DK":2,"1LDK":3,"2K":3,
 const N = (v) => Number(v) || 0;  // 空文字やundefinedを安全に0に変換
 const fmt = (n) => (n==null||isNaN(n)) ? "—" : Math.round(n).toLocaleString("ja-JP");
 const fmtMan = (n) => (n==null||isNaN(n)) ? "—" : (n/10000).toFixed(1)+"万";
-const fmtMonth = (n) => { if(!n||n<=0) return "—"; const y=Math.floor(n/12),m=Math.round(n%12); return y===0?`${m}ヶ月`:m===0?`${y}年`:`${y}年${m}ヶ月`; };
+const fmtMonth = (n) => { if(!n||n<=0) return "—"; if(n>360) return "30年超"; const y=Math.floor(n/12),m=Math.round(n%12); return y===0?`${m}ヶ月`:m===0?`${y}年`:`${y}年${m}ヶ月`; };
 const findRate = (mkt,layout) => { if(mkt.rates[layout]) return mkt.rates[layout]; const fb={"2K":"1LDK","2DK":"2LDK","3K":"2LDK","3DK":"3LDK","4LDK以上":"3LDK"}; return mkt.rates[fb[layout]]||mkt.rates["1LDK"]; };
 const findZone = (addr,muniId) => { for(const k of ZONING_KEYWORDS){ if(addr.includes(k.pattern)) return {zone:k.zone,method:"keyword",keyword:k.pattern}; } if(muniId&&MUNICIPALITY_ZONES[muniId]) return {zone:MUNICIPALITY_ZONES[muniId],method:"municipality"}; return null; };
 
@@ -255,7 +255,6 @@ function MinpakuSimulator() {
   const [prop, setProp] = useState({
     address:"", layout:"1LDK", capacity:4,
     propertyType:"rent", purchasePrice:0, monthlyRent:100000,
-    brokerageFee:0, registrationFee:200000, acquisitionTax:100000, initialInsurance:80000, propertyTaxProration:30000,
     renovationCost:500000, furnitureCost:500000, otherInitialCost:200000, monthlyLoan:0,
     monthlyManagement:10000, monthlyUtilities:15000, monthlyInsurance:5000, monthlyOther:5000,
     cleaningFee:5000, linenFee:2000, consumablesFee:1000,
@@ -263,7 +262,6 @@ function MinpakuSimulator() {
     guestCleaningFee:3000, useMonthlyMode:false,
     monthlyOccupancy:[70,70,70,70,70,70,70,70,70,70,70,70],
     monthlyNightlyRate:null,
-    managementFeeRate:20, setupDesignCost:0, setupFurnishingCost:0, setupPermitCost:300000,
   });
   const [legal, setLegal] = useState({ zone:"unknown", municipality:"none", buildingType:"mansion", isResidentialZone:false });
   const [auto_, setAuto] = useState({ municipality:null, marketData:null, coordinates:null, geoStatus:null, zoneSugg:null, mktApplied:false });
@@ -307,16 +305,6 @@ function MinpakuSimulator() {
   },[prop.address]);
   useEffect(()=>{ if(prop.address.trim().length>=4){const t=setTimeout(geocode,800);return()=>clearTimeout(t);} },[prop.address,geocode]);
 
-  // --- 購入価格→仲介手数料自動計算（手動変更フラグで制御） ---
-  const [brokerageManual, setBrokerageManual] = useState(false);
-  useEffect(()=>{
-    if(!brokerageManual && prop.propertyType==="purchase" && N(prop.purchasePrice)>0){
-      const price=N(prop.purchasePrice);
-      const fee = price>4000000 ? Math.floor(price*0.03+60000) : price>2000000 ? Math.floor(price*0.04+20000) : Math.floor(price*0.05);
-      setProp(p=>({...p, brokerageFee:fee}));
-    }
-  },[prop.purchasePrice, prop.propertyType, brokerageManual]);
-
   // --- 間取り→定員 + 相場再適用 ---
   useEffect(()=>{
     setProp(p=>({...p,capacity:getCapacity(p.layout)}));
@@ -335,9 +323,7 @@ function MinpakuSimulator() {
     const muni=MUNICIPALITIES.find(m=>m.id===legal.municipality)||MUNICIPALITIES[0];
     const isRes=legal.zone.includes("teiso")||legal.zone.includes("chukoso");
     let mDays=muni.minpakuDays||180; if(isRes&&muni.residentialDays) mDays=muni.residentialDays;
-    // 購入諸費用
-    const purchaseCosts = prop.propertyType==="purchase" ? N(prop.brokerageFee)+N(prop.registrationFee)+N(prop.acquisitionTax)+N(prop.initialInsurance)+N(prop.propertyTaxProration) : 0;
-    const init=N(prop.propertyType==="purchase"?prop.purchasePrice:0)+purchaseCosts+N(prop.renovationCost)+N(prop.furnitureCost)+N(prop.otherInitialCost)+N(prop.setupDesignCost)+N(prop.setupFurnishingCost)+N(prop.setupPermitCost);
+    const init=N(prop.propertyType==="purchase"?prop.purchasePrice:0)+N(prop.renovationCost)+N(prop.furnitureCost)+N(prop.otherInitialCost);
 
     // 固定費の内訳
     const fixedDetail = {
@@ -368,7 +354,6 @@ function MinpakuSimulator() {
       const grossRevenue = stayRevenue + cleaningRevenue;           // 売上合計（税前）
       const commission = grossRevenue * (N(prop.commissionRate) / 100); // OTA手数料
       const netRevenue = grossRevenue - commission;                 // 純売上（手数料控除後）
-      const managementFee = netRevenue * (N(prop.managementFeeRate) / 100); // 運営代行費
 
       // --- 変動費の内訳 ---
       const cleaningExpense = turns * N(prop.cleaningFee);          // チェックアウト清掃費
@@ -377,26 +362,17 @@ function MinpakuSimulator() {
       const totalVariableCost = cleaningExpense + linenExpense + consumablesExpense;
 
       // --- 利益 ---
-      const profit = netRevenue - managementFee - totalVariableCost - aFix;
-
-      // 利回り計算
-      const grossYield = init > 0 ? (grossRevenue / init * 100) : null;       // 表面利回り
-      const netYield = init > 0 ? (profit / init * 100) : null;              // 実質利回り（NOI利回り）
-      const cashOnCash = init > 0 ? (profit / init * 100) : null;            // CCR（自己資本利益率）
+      const profit = netRevenue - totalVariableCost - aFix;
 
       return {
         occupied: occ, turns,
         // 売上内訳
         stayRevenue, cleaningRevenue, grossRevenue, commission, netRevenue,
-        // 運営代行費
-        managementFee,
         // 変動費内訳
         cleaningExpense, linenExpense, consumablesExpense, totalVariableCost,
         // 利益
         profit, monthlyProfit: profit / 12,
         payback: profit > 0 && init > 0 ? init / profit : null,
-        // 利回り
-        grossYield, netYield, cashOnCash,
       };
     };
 
@@ -412,9 +388,8 @@ function MinpakuSimulator() {
       const avgStay = Math.max(N(prop.avgStayLength), 1);
       const revenuePerNight = N(prop.nightlyRate) + N(prop.guestCleaningFee) / avgStay;
       const netPerNight = revenuePerNight * (1 - N(prop.commissionRate) / 100);
-      const managementFeePerNight = netPerNight * (N(prop.managementFeeRate) / 100);
       const vcPerNight = (N(prop.cleaningFee) + N(prop.linenFee) + N(prop.consumablesFee)) / avgStay;
-      const profitPerNight = netPerNight - managementFeePerNight - vcPerNight;
+      const profitPerNight = netPerNight - vcPerNight;
       if (profitPerNight <= 0) return null;
       const b = aFix / (profitPerNight * days);
       return b <= 1 ? b : null;
@@ -436,19 +411,17 @@ function MinpakuSimulator() {
       const grossRevenue = stayRevenue + cleaningRevenue;
       const commission = grossRevenue * (N(prop.commissionRate) / 100);
       const netRevenue = grossRevenue - commission;
-      const managementFee = netRevenue * (N(prop.managementFeeRate) / 100);
 
       const cleaningExpense = turns * N(prop.cleaningFee);
       const linenExpense = turns * N(prop.linenFee);
       const consumablesExpense = turns * N(prop.consumablesFee);
       const totalVariableCost = cleaningExpense + linenExpense + consumablesExpense;
 
-      const profit = netRevenue - managementFee - totalVariableCost - mFix;
+      const profit = netRevenue - totalVariableCost - mFix;
       return {
         month: i+1, label: MONTH_LABELS[i], days, rate: N(prop.monthlyOccupancy[i]),
         occ, turns, nRate,
         stayRevenue, cleaningRevenue, grossRevenue, commission, netRevenue,
-        managementFee,
         cleaningExpense, linenExpense, consumablesExpense, totalVariableCost,
         mFix, profit,
       };
@@ -461,7 +434,6 @@ function MinpakuSimulator() {
       grossRevenue: monthly.reduce((s,m) => s+m.grossRevenue, 0),
       commission: monthly.reduce((s,m) => s+m.commission, 0),
       netRevenue: monthly.reduce((s,m) => s+m.netRevenue, 0),
-      managementFee: monthly.reduce((s,m) => s+m.managementFee, 0),
       cleaningExpense: monthly.reduce((s,m) => s+m.cleaningExpense, 0),
       linenExpense: monthly.reduce((s,m) => s+m.linenExpense, 0),
       consumablesExpense: monthly.reduce((s,m) => s+m.consumablesExpense, 0),
@@ -470,48 +442,7 @@ function MinpakuSimulator() {
       avgRate: Math.round(monthly.reduce((s,m) => s+m.rate, 0) / 12),
     } : null;
 
-    // 出口戦略（売却シミュレーション）
-    const exitStrategy = prop.propertyType === "purchase" && init > 0 ? (() => {
-      const r60 = calc(365)(0.6);
-      const annualProfit = r60.profit;
-      const annualGross = r60.grossRevenue;
-      const purchasePrice = N(prop.purchasePrice);
-
-      // 地方木造住宅：土地70%、建物30%（築古は建物比率低め）
-      const landRatio = 0.7;
-      const landValue = purchasePrice * landRatio;
-      const buildingValue = purchasePrice * (1 - landRatio);
-      // 減価率
-      const landChange = -0.01;     // 地方：年-1%
-      const buildingChange = -0.05; // 築古木造：年-5%
-      const renoValue = N(prop.renovationCost);
-      const renoChange = -0.15;     // リフォーム価値：年-15%
-
-      return [1, 2, 3, 5].map(y => {
-        const cumulativeProfit = annualProfit * y;
-        const landVal = landValue * Math.pow(1 + landChange, y);
-        const bldgVal = Math.max(buildingValue * Math.pow(1 + buildingChange, y), 0);
-        const renoVal = Math.max(renoValue * Math.pow(1 + renoChange, y), 0);
-        const propertyVal = landVal + bldgVal + renoVal;
-
-        // EBITDA倍率別
-        const mult = [2, 3, 5].map(m => {
-          const businessVal = annualProfit > 0 ? annualProfit * m : 0;
-          const salePrice = propertyVal + businessVal;
-          const totalReturn = cumulativeProfit + salePrice - init;
-          const roi = totalReturn / init * 100;
-          return { m, businessVal, salePrice, totalReturn, roi };
-        });
-
-        // 物件のみ（事業なし）
-        const totalReturnPropOnly = cumulativeProfit + propertyVal - init;
-        const roiPropOnly = totalReturnPropOnly / init * 100;
-
-        return { year: y, cumulativeProfit, propertyVal, totalReturnPropOnly, roiPropOnly, mult, annualProfit };
-      });
-    })() : null;
-
-    return { init, mFix, aFix, mDays, fixedDetail, scenarios, beM: be(mDays), beR: be(365), gy, monthly, monthlyTotal, exitStrategy };
+    return { init, mFix, aFix, mDays, fixedDetail, scenarios, beM: be(mDays), beR: be(365), gy, monthly, monthlyTotal };
   },[prop,legal]);
 
   const LR = useMemo(()=>({zone:ZONES.find(z=>z.id===legal.zone),muni:MUNICIPALITIES.find(m=>m.id===legal.municipality)||MUNICIPALITIES[0],isRes:legal.zone.includes("teiso")||legal.zone.includes("chukoso")}),[legal]);
@@ -537,17 +468,15 @@ function MinpakuSimulator() {
   const revenueItemsForRate = (s) => [
     { label: `宿泊料（${s.occupied}泊 x ${fmt(prop.nightlyRate)}円）`, value: `${fmt(s.stayRevenue)}円` },
     ...(prop.guestCleaningFee > 0 ? [{ label: `清掃費収入（${s.turns}滞在 x ${fmt(prop.guestCleaningFee)}円）`, value: `${fmt(s.cleaningRevenue)}円` }] : []),
-    { label: `OTA手数料（-${prop.commissionRate}%）`, value: `-${fmt(s.commission)}円` },
-    { label: `運営代行費（-${prop.managementFeeRate}%）`, value: `-${fmt(s.managementFee)}円` },
   ];
 
   // --- PDF ---
   const exportPdf = () => {
-    const th=`<tr style="background:#f8fafc;font-size:11px"><th>稼働率</th><th>日数</th><th>売上</th><th>OTA手数料</th><th>運営代行費</th><th>変動費</th><th>年間利益</th><th>表面利回り</th><th>実質利回り</th><th>回収</th></tr>`;
-    const row=(s,t,c)=>`<tr><td>${s.rate}%</td><td>${s[t].occupied}日</td><td>${fmt(s[t].grossRevenue)}円</td><td>${fmt(s[t].commission)}円</td><td>${fmt(s[t].managementFee)}円</td><td>${fmt(s[t].totalVariableCost)}円</td><td style="font-weight:700;color:${s[t].profit>=0?c:'#dc2626'}">${fmt(s[t].profit)}円</td><td>${s[t].grossYield?s[t].grossYield.toFixed(1)+'%':'—'}</td><td style="font-weight:700">${s[t].netYield?s[t].netYield.toFixed(1)+'%':'—'}</td><td>${s[t].payback?fmtMonth(s[t].payback*12):'—'}</td></tr>`;
+    const th=`<tr style="background:#f8fafc;font-size:11px"><th>稼働率</th><th>日数</th><th>売上</th><th>OTA手数料</th><th>変動費</th><th>年間利益</th><th>月利益</th><th>回収</th></tr>`;
+    const row=(s,t,c)=>`<tr><td>${s.rate}%</td><td>${s[t].occupied}日</td><td>${fmt(s[t].grossRevenue)}円</td><td>${fmt(s[t].commission)}円</td><td>${fmt(s[t].totalVariableCost)}円</td><td style="font-weight:700;color:${s[t].profit>=0?c:'#dc2626'}">${fmt(s[t].profit)}円</td><td>${fmt(s[t].monthlyProfit)}円</td><td>${s[t].payback?fmtMonth(s[t].payback*12):'—'}</td></tr>`;
     const html=`<!DOCTYPE html><html><head><meta charset="utf-8"><title>民泊シミュレーション</title><style>body{font-family:'Hiragino Sans','Yu Gothic',sans-serif;margin:30px 40px;color:#1e293b;font-size:13px;line-height:1.6}h1{font-size:18px;border-bottom:2px solid #3b82f6;padding-bottom:8px}h2{font-size:14px;margin-top:22px;color:#1e40af;border-left:4px solid #3b82f6;padding-left:8px}table{width:100%;border-collapse:collapse;margin:8px 0 14px;font-size:11px}th,td{border:1px solid #e2e8f0;padding:5px 8px;text-align:right}th{background:#f8fafc;text-align:center}td:first-child{text-align:center;font-weight:600}.g{display:grid;grid-template-columns:1fr 1fr;gap:4px 20px;margin:8px 0}.gi{display:flex;justify-content:space-between;border-bottom:1px dotted #e2e8f0;padding:3px 0}.gl{color:#64748b}.gv{font-weight:600}.n{background:#fffbeb;border:1px solid #fde68a;border-radius:6px;padding:8px 12px;margin:8px 0;font-size:11px}.ft{margin-top:28px;border-top:1px solid #e2e8f0;padding-top:8px;font-size:10px;color:#94a3b8;text-align:center}@media print{body{margin:15px 20px}}</style></head><body>
 <h1>民泊物件 シミュレーション結果</h1><p style="color:#64748b;font-size:11px">作成日: ${new Date().toLocaleDateString('ja-JP')}</p>
-<h2>物件情報</h2><div class="g"><div class="gi"><span class="gl">住所</span><span class="gv">${prop.address||'未入力'}</span></div><div class="gi"><span class="gl">間取り/定員</span><span class="gv">${prop.layout}/${prop.capacity}人</span></div><div class="gi"><span class="gl">形態</span><span class="gv">${prop.propertyType==='rent'?'賃貸':'購入'}</span></div><div class="gi"><span class="gl">${prop.propertyType==='rent'?'家賃':'購入価格'}</span><span class="gv">${prop.propertyType==='rent'?fmt(prop.monthlyRent)+'円/月':fmt(prop.purchasePrice)+'円'}</span></div><div class="gi"><span class="gl">初期投資</span><span class="gv">${fmt(R.init)}円</span></div>${prop.propertyType==='purchase'?`<div class="gi"><span class="gl">購入諸費用内訳</span><span class="gv">仲介${fmt(prop.brokerageFee)}円／登記${fmt(prop.registrationFee)}円／取得税${fmt(prop.acquisitionTax)}円／保険${fmt(prop.initialInsurance)}円／精算金${fmt(prop.propertyTaxProration)}円</span></div>`:''}<div class="gi"><span class="gl">固定費</span><span class="gv">${fmt(R.mFix)}円/月</span></div><div class="gi"><span class="gl">宿泊単価</span><span class="gv">${fmt(prop.nightlyRate)}円/泊（1人あたり約${fmt(Math.round(N(prop.nightlyRate)/Math.max(N(prop.capacity),1)))}円）</span></div><div class="gi"><span class="gl">清掃費（経費）</span><span class="gv">${fmt(prop.cleaningFee)}円/回</span></div><div class="gi"><span class="gl">清掃費（ゲスト徴収）</span><span class="gv">${fmt(prop.guestCleaningFee)}円/滞在</span></div><div class="gi"><span class="gl">運営代行費率</span><span class="gv">${prop.managementFeeRate}%</span></div><div class="gi"><span class="gl">立ち上げ費用（デザイン）</span><span class="gv">${fmt(prop.setupDesignCost)}円</span></div><div class="gi"><span class="gl">立ち上げ費用（設営）</span><span class="gv">${fmt(prop.setupFurnishingCost)}円</span></div><div class="gi"><span class="gl">立ち上げ費用（許認可）</span><span class="gv">${fmt(prop.setupPermitCost)}円</span></div><div class="gi"><span class="gl">用途地域</span><span class="gv">${LR.zone?.label||'未選択'}</span></div><div class="gi"><span class="gl">自治体</span><span class="gv">${LR.muni.label}</span></div></div>
+<h2>物件情報</h2><div class="g"><div class="gi"><span class="gl">住所</span><span class="gv">${prop.address||'未入力'}</span></div><div class="gi"><span class="gl">間取り/定員</span><span class="gv">${prop.layout}/${prop.capacity}人</span></div><div class="gi"><span class="gl">形態</span><span class="gv">${prop.propertyType==='rent'?'賃貸':'購入'}</span></div><div class="gi"><span class="gl">${prop.propertyType==='rent'?'家賃':'購入価格'}</span><span class="gv">${prop.propertyType==='rent'?fmt(prop.monthlyRent)+'円/月':fmt(prop.purchasePrice)+'円'}</span></div><div class="gi"><span class="gl">初期投資</span><span class="gv">${fmt(R.init)}円</span></div><div class="gi"><span class="gl">固定費</span><span class="gv">${fmt(R.mFix)}円/月</span></div><div class="gi"><span class="gl">宿泊単価</span><span class="gv">${fmt(prop.nightlyRate)}円/泊</span></div><div class="gi"><span class="gl">清掃費（経費）</span><span class="gv">${fmt(prop.cleaningFee)}円/回</span></div><div class="gi"><span class="gl">清掃費（ゲスト徴収）</span><span class="gv">${fmt(prop.guestCleaningFee)}円/滞在</span></div><div class="gi"><span class="gl">用途地域</span><span class="gv">${LR.zone?.label||'未選択'}</span></div><div class="gi"><span class="gl">自治体</span><span class="gv">${LR.muni.label}</span></div></div>
 <h2>経費内訳</h2>
 <table><tr style="background:#f8fafc;font-size:11px"><th colspan="2">固定費（月額）</th></tr>
 <tr><td style="text-align:left">${R.fixedDetail.rentOrLoanLabel}</td><td>${fmt(R.fixedDetail.rentOrLoan)}円</td></tr>
@@ -561,14 +490,9 @@ function MinpakuSimulator() {
 <tr><td style="text-align:left">リネン費</td><td>${fmt(prop.linenFee)}円</td></tr>
 <tr><td style="text-align:left">消耗品費</td><td>${fmt(prop.consumablesFee)}円</td></tr>
 <tr style="font-weight:700;background:#f0fdf4"><td style="text-align:left">合計</td><td>${fmt(N(prop.cleaningFee)+N(prop.linenFee)+N(prop.consumablesFee))}円/回</td></tr></table>
-${R.monthly ? `<h2>月別収支シミュレーション</h2><table><tr style="background:#f8fafc;font-size:11px"><th>月</th><th>稼働率</th><th>稼働日</th><th>宿泊料</th><th>清掃費収入</th><th>売上計</th><th>OTA手数料</th><th>運営代行費</th><th>変動費</th><th>固定費</th><th>利益</th></tr>${R.monthly.map(m=>`<tr><td style="text-align:center;font-weight:600">${m.label}</td><td style="text-align:right">${m.rate}%</td><td style="text-align:right">${m.occ}日</td><td style="text-align:right">${fmt(m.stayRevenue)}円</td><td style="text-align:right">${fmt(m.cleaningRevenue)}円</td><td style="text-align:right">${fmt(m.grossRevenue)}円</td><td style="text-align:right">${fmt(m.commission)}円</td><td style="text-align:right">${fmt(m.managementFee)}円</td><td style="text-align:right">${fmt(m.totalVariableCost)}円</td><td style="text-align:right">${fmt(m.mFix)}円</td><td style="text-align:right;font-weight:700;color:${m.profit>=0?'#2563eb':'#dc2626'}">${fmt(m.profit)}円</td></tr>`).join('')}<tr style="border-top:2px solid #94a3b8;font-weight:700;background:#f8fafc"><td style="text-align:center">合計</td><td style="text-align:right">${R.monthlyTotal.avgRate}%</td><td style="text-align:right">${R.monthlyTotal.occ}日</td><td style="text-align:right">${fmt(R.monthlyTotal.stayRevenue)}円</td><td style="text-align:right">${fmt(R.monthlyTotal.cleaningRevenue)}円</td><td style="text-align:right">${fmt(R.monthlyTotal.grossRevenue)}円</td><td style="text-align:right">${fmt(R.monthlyTotal.commission)}円</td><td style="text-align:right">${fmt(R.monthlyTotal.managementFee)}円</td><td style="text-align:right">${fmt(R.monthlyTotal.totalVariableCost)}円</td><td style="text-align:right">${fmt(R.aFix)}円</td><td style="text-align:right;color:${R.monthlyTotal.profit>=0?'#2563eb':'#dc2626'}">${fmt(R.monthlyTotal.profit)}円</td></tr></table>` : `<h2>民泊新法 — 年間${R.mDays}日</h2><table>${th}${R.scenarios.map(s=>row(s,"minpaku","#2563eb")).join("")}</table>
+${R.monthly ? `<h2>月別収支シミュレーション</h2><table><tr style="background:#f8fafc;font-size:11px"><th>月</th><th>稼働率</th><th>稼働日</th><th>宿泊料</th><th>清掃費収入</th><th>売上計</th><th>OTA手数料</th><th>変動費</th><th>固定費</th><th>利益</th></tr>${R.monthly.map(m=>`<tr><td style="text-align:center;font-weight:600">${m.label}</td><td style="text-align:right">${m.rate}%</td><td style="text-align:right">${m.occ}日</td><td style="text-align:right">${fmt(m.stayRevenue)}円</td><td style="text-align:right">${fmt(m.cleaningRevenue)}円</td><td style="text-align:right">${fmt(m.grossRevenue)}円</td><td style="text-align:right">${fmt(m.commission)}円</td><td style="text-align:right">${fmt(m.totalVariableCost)}円</td><td style="text-align:right">${fmt(m.mFix)}円</td><td style="text-align:right;font-weight:700;color:${m.profit>=0?'#2563eb':'#dc2626'}">${fmt(m.profit)}円</td></tr>`).join('')}<tr style="border-top:2px solid #94a3b8;font-weight:700;background:#f8fafc"><td style="text-align:center">合計</td><td style="text-align:right">${R.monthlyTotal.avgRate}%</td><td style="text-align:right">${R.monthlyTotal.occ}日</td><td style="text-align:right">${fmt(R.monthlyTotal.stayRevenue)}円</td><td style="text-align:right">${fmt(R.monthlyTotal.cleaningRevenue)}円</td><td style="text-align:right">${fmt(R.monthlyTotal.grossRevenue)}円</td><td style="text-align:right">${fmt(R.monthlyTotal.commission)}円</td><td style="text-align:right">${fmt(R.monthlyTotal.totalVariableCost)}円</td><td style="text-align:right">${fmt(R.aFix)}円</td><td style="text-align:right;color:${R.monthlyTotal.profit>=0?'#2563eb':'#dc2626'}">${fmt(R.monthlyTotal.profit)}円</td></tr></table>` : `<h2>民泊新法 — 年間${R.mDays}日</h2><table>${th}${R.scenarios.map(s=>row(s,"minpaku","#2563eb")).join("")}</table>
 <h2>旅館業法 — 年間365日</h2><table>${th}${R.scenarios.map(s=>row(s,"ryokan","#059669")).join("")}</table>`}
 ${LR.muni.restriction?`<div class="n"><strong>${LR.muni.label}:</strong> ${LR.muni.restriction}</div>`:''}
-${R.exitStrategy ? `<h2>出口戦略（売却シミュレーション）</h2>
-<p style="font-size:11px;color:#64748b;margin-bottom:8px">旅館業法・稼働率60%で運営した場合の年数別リターン試算（年間利益: ${fmtMan(R.exitStrategy[0]?.annualProfit)}円）</p>
-<table><tr style="background:#f8fafc;font-size:11px"><th>売却年数</th><th>運営利益累計</th><th>物件推定価値</th><th>物件のみ売却ROI</th><th>事業付き(3倍)売却額</th><th>事業付き(3倍)ROI</th><th>事業付き(5倍)売却額</th><th>事業付き(5倍)ROI</th></tr>
-${R.exitStrategy.map(r=>{const m3=r.mult.find(x=>x.m===3);const m5=r.mult.find(x=>x.m===5);return `<tr${r.year===3?' style="background:#eff6ff;font-weight:700"':''}><td style="text-align:center;font-weight:700">${r.year}年後${r.year===3?' ★':''}</td><td style="text-align:right">${fmtMan(r.cumulativeProfit)}</td><td style="text-align:right">${fmtMan(r.propertyVal)}</td><td style="text-align:right;color:${r.roiPropOnly>=0?'#059669':'#dc2626'}">${r.roiPropOnly.toFixed(0)}%</td><td style="text-align:right">${fmtMan(m3.salePrice)}</td><td style="text-align:right;font-weight:700;color:${m3.roi>=0?'#059669':'#dc2626'}">${m3.roi.toFixed(0)}%</td><td style="text-align:right">${fmtMan(m5.salePrice)}</td><td style="text-align:right;font-weight:700;color:${m5.roi>=0?'#d97706':'#dc2626'}">${m5.roi.toFixed(0)}%</td></tr>`;}).join('')}</table>
-<p style="font-size:10px;color:#94a3b8;margin-top:4px">※ EBITDA倍率 = 年間利益 × 倍率。物件推定価値 = 土地(年-1%) + 建物(年-5%) + リフォーム残価(年-15%)</p>` : ''}
 <div class="ft">※概算シミュレーション。投資判断は自己責任で。法規制は管轄の保健所にご確認ください。</div></body></html>`;
     const w=window.open("","_blank"); if(w){w.document.write(html);w.document.close();setTimeout(()=>w.print(),500);}
   };
@@ -660,26 +584,7 @@ ${R.exitStrategy.map(r=>{const m3=r.mult.find(x=>x.m===3);const m5=r.mult.find(x
             {prop.propertyType==="purchase"?<><Field label="物件購入価格" value={prop.purchasePrice} onChange={v=>up("purchasePrice",v)} unit="円" /><Field label="月々のローン返済額" value={prop.monthlyLoan} onChange={v=>up("monthlyLoan",v)} unit="円/月" /></>:<Field label="月額家賃" value={prop.monthlyRent} onChange={v=>up("monthlyRent",v)} unit="円/月" />}
             <Field label="リフォーム・内装費" value={prop.renovationCost} onChange={v=>up("renovationCost",v)} unit="円" />
             <Field label="家具・備品費" value={prop.furnitureCost} onChange={v=>up("furnitureCost",v)} unit="円" />
-            <Field label="その他初期費用" value={prop.otherInitialCost} onChange={v=>up("otherInitialCost",v)} unit="円" help="保証金など" />
-            {prop.propertyType==="purchase"&&<div className="md:col-span-2 mt-3 p-3 bg-amber-50 rounded-xl border border-amber-200">
-              <p className="text-xs font-bold text-amber-700 mb-2">購入諸費用</p>
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-x-6">
-                <Field label="仲介手数料" value={prop.brokerageFee} onChange={v=>{setBrokerageManual(true);up("brokerageFee",v)}} unit="円" help={brokerageManual?"手動入力中（自動計算に戻すには0を入力後価格を再入力）":"物件価格から自動計算（手動変更可）"} />
-                <Field label="登記費用" value={prop.registrationFee} onChange={v=>up("registrationFee",v)} unit="円" help="所有権移転登記・司法書士報酬" />
-                <Field label="不動産取得税" value={prop.acquisitionTax} onChange={v=>up("acquisitionTax",v)} unit="円" help="取得後3〜6ヶ月後に課税" />
-                <Field label="火災保険（初年度）" value={prop.initialInsurance} onChange={v=>up("initialInsurance",v)} unit="円" help="民泊用の火災保険" />
-                <Field label="固定資産税精算金" value={prop.propertyTaxProration} onChange={v=>up("propertyTaxProration",v)} unit="円" help="売主との日割り精算分" />
-              </div>
-              <div className="mt-2 px-3 py-1.5 bg-amber-100 rounded-lg"><p className="text-xs text-amber-800">購入諸費用 小計: <span className="font-bold">{fmt(N(prop.brokerageFee)+N(prop.registrationFee)+N(prop.acquisitionTax)+N(prop.initialInsurance)+N(prop.propertyTaxProration))}円</span></p></div>
-            </div>}
-            <div className="md:col-span-2 mt-3 p-3 bg-violet-50 rounded-xl border border-violet-200">
-              <p className="text-xs font-bold text-violet-700 mb-2">立ち上げ費用（MOSVA）</p>
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-x-6">
-                <Field label="デザイン費" value={prop.setupDesignCost} onChange={v=>up("setupDesignCost",v)} unit="円" help="インテリアデザイン・コーディネート" />
-                <Field label="設営費" value={prop.setupFurnishingCost} onChange={v=>up("setupFurnishingCost",v)} unit="円" help="家具搬入・設置・スタイリング" />
-                <Field label="許認可申請費" value={prop.setupPermitCost} onChange={v=>up("setupPermitCost",v)} unit="円" help="旅館業・民泊届出の申請代行" />
-              </div>
-            </div>
+            <Field label="その他初期費用" value={prop.otherInitialCost} onChange={v=>up("otherInitialCost",v)} unit="円" help="仲介手数料、保証金、届出費用など" />
           </div>
           {R.init>0&&<div className="mt-3 px-4 py-2.5 bg-slate-50 rounded-xl"><p className="text-sm text-gray-700">初期投資合計: <span className="font-bold text-gray-900">{fmt(R.init)}円</span></p></div>}
         </Card>
@@ -708,7 +613,6 @@ ${R.exitStrategy.map(r=>{const m3=r.mult.find(x=>x.m===3);const m5=r.mult.find(x
             <Field label="リネン費（1回）" value={prop.linenFee} onChange={v=>up("linenFee",v)} unit="円/回" />
             <Field label="消耗品費（1回）" value={prop.consumablesFee} onChange={v=>up("consumablesFee",v)} unit="円/回" help="アメニティ等" />
             <Field label="OTA手数料率" value={prop.commissionRate} onChange={v=>up("commissionRate",v)} unit="%" help="Airbnb: 約3% / Booking.com: 約15%。売上全体（宿泊料＋清掃費）に対して課されます" />
-            <Field label="運営代行手数料率" value={prop.managementFeeRate} onChange={v=>up("managementFeeRate",v)} unit="%" help="売上からOTA手数料を引いた金額に対して課されます（MOSVA運営代行）" />
           </div>
         </Card>
 
@@ -767,179 +671,7 @@ ${R.exitStrategy.map(r=>{const m3=r.mult.find(x=>x.m===3);const m5=r.mult.find(x
             <Metric label="月平均利益" value={`${fmt(Math.round((R.monthlyTotal?.profit||0)/12))}円`} color={R.monthlyTotal?.profit>=0?"text-emerald-600":"text-red-500"} />
           </>)}
         </div>
-        {/* === 投資サマリー（購入型のみ） === */}
-        {prop.propertyType === "purchase" && R.init > 0 && !prop.useMonthlyMode && (() => {
-          const s50m = R.scenarios.find(s=>s.rate===50)?.minpaku;
-          const s60m = R.scenarios.find(s=>s.rate===60)?.minpaku;
-          const s50r = R.scenarios.find(s=>s.rate===50)?.ryokan;
-          const s60r = R.scenarios.find(s=>s.rate===60)?.ryokan;
-          const riskLevel = R.beR && R.beR < 0.2 ? "低" : R.beR && R.beR < 0.35 ? "中" : "高";
-          const riskColor = riskLevel === "低" ? "text-green-600" : riskLevel === "中" ? "text-yellow-600" : "text-red-600";
-          const riskBg = riskLevel === "低" ? "bg-green-50 border-green-200" : riskLevel === "中" ? "bg-yellow-50 border-yellow-200" : "bg-red-50 border-red-200";
-          return (
-          <div className={`mb-5 rounded-2xl border-2 p-5 ${riskBg}`}>
-            <h3 className="text-sm font-bold text-gray-800 mb-4 flex items-center gap-2">
-              <span className="text-lg">📊</span> 投資判断サマリー
-              <span className={`ml-auto text-xs px-2 py-1 rounded-full font-bold ${riskLevel === "低" ? "bg-green-100 text-green-700" : riskLevel === "中" ? "bg-yellow-100 text-yellow-700" : "bg-red-100 text-red-700"}`}>
-                リスク: {riskLevel}
-              </span>
-            </h3>
-
-            {/* 主要指標 */}
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
-              <div className="bg-white rounded-xl p-3 text-center shadow-sm">
-                <p className="text-xs text-gray-500">初期投資額</p>
-                <p className="text-lg font-bold text-gray-800">{(R.init/10000).toFixed(0)}<span className="text-xs font-normal">万円</span></p>
-              </div>
-              <div className="bg-white rounded-xl p-3 text-center shadow-sm">
-                <p className="text-xs text-gray-500">損益分岐点</p>
-                <p className="text-lg font-bold text-blue-600">{R.beR ? (R.beR*100).toFixed(0) : "—"}<span className="text-xs font-normal">%</span></p>
-              </div>
-              <div className="bg-white rounded-xl p-3 text-center shadow-sm">
-                <p className="text-xs text-gray-500">表面利回り<span className="text-gray-400">(60%)</span></p>
-                <p className="text-lg font-bold text-amber-600">{s60r?.grossYield ? s60r.grossYield.toFixed(1) : "—"}<span className="text-xs font-normal">%</span></p>
-              </div>
-              <div className="bg-white rounded-xl p-3 text-center shadow-sm">
-                <p className="text-xs text-gray-500">実質利回り<span className="text-gray-400">(60%)</span></p>
-                <p className="text-lg font-bold text-emerald-600">{s60r?.netYield ? s60r.netYield.toFixed(1) : "—"}<span className="text-xs font-normal">%</span></p>
-              </div>
-            </div>
-
-            {/* 旅館業 利回り比較テーブル */}
-            <div className="bg-white rounded-xl p-4 shadow-sm mb-3">
-              <p className="text-xs font-bold text-gray-700 mb-2">旅館業法（365日）— 利回り比較</p>
-              <table className="w-full text-xs">
-                <thead><tr className="bg-slate-50 text-gray-500">
-                  <th className="px-2 py-1.5 font-semibold">稼働率</th>
-                  <th className="px-2 py-1.5 text-right font-semibold">年間売上</th>
-                  <th className="px-2 py-1.5 text-right font-semibold">年間利益</th>
-                  <th className="px-2 py-1.5 text-right font-semibold">表面利回り</th>
-                  <th className="px-2 py-1.5 text-right font-semibold">実質利回り</th>
-                  <th className="px-2 py-1.5 text-right font-semibold">投資回収</th>
-                </tr></thead>
-                <tbody>
-                  {R.scenarios.filter(s=>[40,50,60,70,80].includes(s.rate)).map(s=>(
-                    <tr key={s.rate} className={`border-t border-gray-50 ${s.rate===60?"bg-emerald-50 font-semibold":""}`}>
-                      <td className="px-2 py-1.5 text-center font-bold">{s.rate}%{s.rate===60?" ★":""}</td>
-                      <td className="px-2 py-1.5 text-right">{(s.ryokan.grossRevenue/10000).toFixed(0)}万円</td>
-                      <td className={`px-2 py-1.5 text-right font-bold ${s.ryokan.profit>=0?"text-emerald-600":"text-red-500"}`}>{(s.ryokan.profit/10000).toFixed(1)}万円</td>
-                      <td className="px-2 py-1.5 text-right text-amber-600">{s.ryokan.grossYield?s.ryokan.grossYield.toFixed(1)+"%":"—"}</td>
-                      <td className="px-2 py-1.5 text-right text-emerald-600 font-bold">{s.ryokan.netYield?s.ryokan.netYield.toFixed(1)+"%":"—"}</td>
-                      <td className="px-2 py-1.5 text-right text-gray-500">{s.ryokan.payback?fmtMonth(s.ryokan.payback*12):"—"}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-
-            {/* 補足説明 */}
-            <div className="text-xs text-gray-500 space-y-0.5">
-              <p><strong>表面利回り</strong> = 年間売上（総収入）÷ 初期投資額 × 100</p>
-              <p><strong>実質利回り</strong> = 年間利益（経費控除後）÷ 初期投資額 × 100</p>
-              <p className="text-gray-400 mt-1">※ 一般的な不動産投資の実質利回り目安: 3〜5%（区分マンション）、5〜8%（一棟アパート）</p>
-            </div>
-          </div>
-          );
-        })()}
-
-        {/* === 出口戦略（売却シミュレーション） === */}
-        {prop.propertyType === "purchase" && R.exitStrategy && !prop.useMonthlyMode && (
-          <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-5 mb-5">
-            <h3 className="text-sm font-bold text-gray-800 mb-1 flex items-center gap-2">
-              <span className="text-lg">🏠</span> 出口戦略（売却シミュレーション）
-            </h3>
-            <p className="text-xs text-gray-400 mb-4">旅館業法・稼働率60%で運営した場合の年数別リターン試算</p>
-
-            {/* 前提条件 */}
-            <div className="bg-slate-50 rounded-xl p-3 mb-4">
-              <p className="text-xs font-bold text-gray-600 mb-2">前提条件</p>
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-xs">
-                <div><span className="text-gray-500">初期投資: </span><span className="font-bold">{fmtMan(R.init)}円</span></div>
-                <div><span className="text-gray-500">年間利益(60%): </span><span className="font-bold text-emerald-600">{fmtMan(R.exitStrategy[0]?.annualProfit)}円</span></div>
-                <div><span className="text-gray-500">土地比率: </span><span className="font-bold">70%</span></div>
-                <div><span className="text-gray-500">地価変動: </span><span className="font-bold text-red-500">年-1%</span></div>
-              </div>
-            </div>
-
-            {/* メインテーブル */}
-            <div className="overflow-x-auto">
-              <table className="w-full text-xs">
-                <thead>
-                  <tr className="bg-slate-50 text-gray-500">
-                    <th className="px-2 py-2 font-semibold text-center" rowSpan="2">売却<br/>年数</th>
-                    <th className="px-2 py-2 text-right font-semibold" rowSpan="2">運営利益<br/>累計</th>
-                    <th className="px-2 py-2 text-right font-semibold" rowSpan="2">物件<br/>推定価値</th>
-                    <th className="px-2 py-2 text-center font-semibold border-l border-gray-200" colSpan="2">物件のみ売却</th>
-                    <th className="px-2 py-2 text-center font-semibold border-l border-gray-200 bg-emerald-50" colSpan="2">事業付き売却<br/><span className="text-gray-400 font-normal">(EBITDA 3倍)</span></th>
-                    <th className="px-2 py-2 text-center font-semibold border-l border-gray-200 bg-amber-50" colSpan="2">事業付き売却<br/><span className="text-gray-400 font-normal">(EBITDA 5倍)</span></th>
-                  </tr>
-                  <tr className="bg-slate-50 text-gray-500">
-                    <th className="px-2 py-1 text-right font-semibold border-l border-gray-200">売却額</th>
-                    <th className="px-2 py-1 text-right font-semibold">ROI</th>
-                    <th className="px-2 py-1 text-right font-semibold border-l border-gray-200 bg-emerald-50">売却額</th>
-                    <th className="px-2 py-1 text-right font-semibold bg-emerald-50">ROI</th>
-                    <th className="px-2 py-1 text-right font-semibold border-l border-gray-200 bg-amber-50">売却額</th>
-                    <th className="px-2 py-1 text-right font-semibold bg-amber-50">ROI</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {R.exitStrategy.map(row => {
-                    const m3 = row.mult.find(x => x.m === 3);
-                    const m5 = row.mult.find(x => x.m === 5);
-                    return (
-                      <tr key={row.year} className={`border-t border-gray-100 ${row.year === 3 ? "bg-blue-50 font-semibold" : "hover:bg-gray-50"}`}>
-                        <td className="px-2 py-2 text-center font-bold">{row.year}年後{row.year === 3 ? " ★" : ""}</td>
-                        <td className="px-2 py-2 text-right">{fmtMan(row.cumulativeProfit)}</td>
-                        <td className="px-2 py-2 text-right">{fmtMan(row.propertyVal)}</td>
-                        <td className="px-2 py-2 text-right border-l border-gray-200">{fmtMan(row.propertyVal)}</td>
-                        <td className={`px-2 py-2 text-right ${row.roiPropOnly >= 0 ? "text-emerald-600" : "text-red-500"}`}>{row.roiPropOnly.toFixed(0)}%</td>
-                        <td className="px-2 py-2 text-right border-l border-gray-200 bg-emerald-50/50">{fmtMan(m3.salePrice)}</td>
-                        <td className={`px-2 py-2 text-right bg-emerald-50/50 font-bold ${m3.roi >= 0 ? "text-emerald-600" : "text-red-500"}`}>{m3.roi.toFixed(0)}%</td>
-                        <td className="px-2 py-2 text-right border-l border-gray-200 bg-amber-50/50">{fmtMan(m5.salePrice)}</td>
-                        <td className={`px-2 py-2 text-right bg-amber-50/50 font-bold ${m5.roi >= 0 ? "text-amber-600" : "text-red-500"}`}>{m5.roi.toFixed(0)}%</td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-
-            {/* 3年後ハイライト */}
-            {(() => {
-              const y3 = R.exitStrategy.find(r => r.year === 3);
-              if (!y3) return null;
-              const m3 = y3.mult.find(x => x.m === 3);
-              return (
-                <div className="mt-4 p-4 bg-blue-50 rounded-xl border border-blue-200">
-                  <p className="text-xs font-bold text-blue-800 mb-2">📌 3年後の売却シナリオ（推奨目安）</p>
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                    <div className="bg-white rounded-lg p-3 text-center">
-                      <p className="text-xs text-gray-500">3年間の運営利益合計</p>
-                      <p className={`text-lg font-bold ${y3.cumulativeProfit >= 0 ? "text-emerald-600" : "text-red-500"}`}>{fmtMan(y3.cumulativeProfit)}円</p>
-                    </div>
-                    <div className="bg-white rounded-lg p-3 text-center">
-                      <p className="text-xs text-gray-500">事業付き売却額（3倍）</p>
-                      <p className="text-lg font-bold text-blue-600">{fmtMan(m3.salePrice)}円</p>
-                    </div>
-                    <div className="bg-white rounded-lg p-3 text-center">
-                      <p className="text-xs text-gray-500">トータルROI</p>
-                      <p className={`text-lg font-bold ${m3.roi >= 0 ? "text-emerald-600" : "text-red-500"}`}>{m3.roi.toFixed(0)}%</p>
-                      <p className="text-xs text-gray-400">（初期投資{fmtMan(R.init)}に対して）</p>
-                    </div>
-                  </div>
-                </div>
-              );
-            })()}
-
-            {/* 用語説明 */}
-            <div className="mt-3 text-xs text-gray-500 space-y-0.5">
-              <p><strong>EBITDA倍率</strong> = 事業売却時の価格算定基準。年間利益 × 倍率 = 事業価値</p>
-              <p><strong>物件推定価値</strong> = 土地（年-1%）＋建物（年-5%）＋リフォーム残価（年-15%）</p>
-              <p><strong>ROI</strong> = （運営利益累計 + 売却額 − 初期投資）÷ 初期投資 × 100</p>
-              <p className="text-gray-400 mt-1">※ 実際の売却価格は市場環境・運営実績・物件状態により変動します。EBITDA 2〜5倍が民泊事業の一般的な目安です。</p>
-            </div>
-          </div>
-        )}
+        {!prop.useMonthlyMode && R.gy&&<div className="mb-5 px-4 py-3 bg-amber-50 rounded-xl border border-amber-200"><p className="text-sm text-amber-800">表面利回り（稼働率60%想定）: <span className="font-bold text-lg">{R.gy.toFixed(1)}%</span></p></div>}
 
         {/* === 経費内訳セクション === */}
         <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-5 mb-5">
@@ -963,14 +695,10 @@ ${R.exitStrategy.map(r=>{const m3=r.mult.find(x=>x.m===3);const m5=r.mult.find(x
                   <span className="text-gray-600">OTA手数料（{prop.commissionRate}%）</span>
                   <span className="font-semibold text-red-500">-{prop.commissionRate}%</span>
                 </div>
-                <div className="flex justify-between text-xs">
-                  <span className="text-gray-600">運営代行費（{prop.managementFeeRate}%）</span>
-                  <span className="font-semibold text-red-500">-{prop.managementFeeRate}%</span>
-                </div>
               </div>
               <div className="flex justify-between text-xs font-bold mt-2 pt-2 border-t border-green-200">
                 <span className="text-green-700">1滞在あたり純売上</span>
-                <span className="text-green-700">{fmt(Math.round((N(prop.nightlyRate) * N(prop.avgStayLength) + N(prop.guestCleaningFee)) * (1 - N(prop.commissionRate) / 100) * (1 - N(prop.managementFeeRate) / 100)))}円</span>
+                <span className="text-green-700">{fmt(Math.round((N(prop.nightlyRate) * N(prop.avgStayLength) + N(prop.guestCleaningFee)) * (1 - N(prop.commissionRate) / 100)))}円</span>
               </div>
             </div>
 
@@ -1000,7 +728,6 @@ ${R.exitStrategy.map(r=>{const m3=r.mult.find(x=>x.m===3);const m5=r.mult.find(x
                 <th className="px-2 py-2 text-right font-semibold">清掃費収入</th>
                 <th className="px-2 py-2 text-right font-semibold">売上計</th>
                 <th className="px-2 py-2 text-right font-semibold">OTA手数料</th>
-                <th className="px-2 py-2 text-right font-semibold">運営代行費</th>
                 <th className="px-2 py-2 text-right font-semibold">変動費</th>
                 <th className="px-2 py-2 text-right font-semibold">固定費</th>
                 <th className="px-2 py-2 text-right font-semibold">利益</th>
@@ -1014,7 +741,6 @@ ${R.exitStrategy.map(r=>{const m3=r.mult.find(x=>x.m===3);const m5=r.mult.find(x
                   <td className="px-2 py-2 text-right text-green-600">{fmt(m.cleaningRevenue)}円</td>
                   <td className="px-2 py-2 text-right font-semibold">{fmt(m.grossRevenue)}円</td>
                   <td className="px-2 py-2 text-right text-gray-500">-{fmt(m.commission)}円</td>
-                  <td className="px-2 py-2 text-right text-gray-500">-{fmt(m.managementFee)}円</td>
                   <td className="px-2 py-2 text-right text-gray-500">-{fmt(m.totalVariableCost)}円</td>
                   <td className="px-2 py-2 text-right text-gray-500">-{fmt(m.mFix)}円</td>
                   <td className={`px-2 py-2 text-right font-bold ${m.profit>=0?"text-blue-600":"text-red-500"}`}>{fmt(m.profit)}円</td>
@@ -1027,7 +753,6 @@ ${R.exitStrategy.map(r=>{const m3=r.mult.find(x=>x.m===3);const m5=r.mult.find(x
                   <td className="px-2 py-2 text-right text-green-600">{fmt(R.monthlyTotal.cleaningRevenue)}円</td>
                   <td className="px-2 py-2 text-right">{fmt(R.monthlyTotal.grossRevenue)}円</td>
                   <td className="px-2 py-2 text-right text-gray-500">-{fmt(R.monthlyTotal.commission)}円</td>
-                  <td className="px-2 py-2 text-right text-gray-500">-{fmt(R.monthlyTotal.managementFee)}円</td>
                   <td className="px-2 py-2 text-right text-gray-500">-{fmt(R.monthlyTotal.totalVariableCost)}円</td>
                   <td className="px-2 py-2 text-right text-gray-500">-{fmt(R.aFix)}円</td>
                   <td className={`px-2 py-2 text-right font-bold ${R.monthlyTotal.profit>=0?"text-blue-600":"text-red-500"}`}>{fmt(R.monthlyTotal.profit)}円</td>
@@ -1083,18 +808,16 @@ ${R.exitStrategy.map(r=>{const m3=r.mult.find(x=>x.m===3);const m5=r.mult.find(x
         <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-5 mb-5">
           <div className="flex items-center gap-2 mb-3"><span className="w-3 h-3 bg-blue-500 rounded-full" /><h3 className="text-sm font-bold text-gray-700">民泊新法</h3><span className="text-xs text-gray-400">年間{R.mDays}日</span></div>
           <div className="overflow-x-auto"><table className="w-full text-xs">
-            <thead><tr className="bg-slate-50 text-gray-500"><th className="px-2 py-2 font-semibold">稼働率</th><th className="px-2 py-2 text-right font-semibold">日数</th><th className="px-2 py-2 text-right font-semibold">宿泊料</th><th className="px-2 py-2 text-right font-semibold">清掃費収入</th><th className="px-2 py-2 text-right font-semibold">OTA手数料</th><th className="px-2 py-2 text-right font-semibold">運営代行費</th><th className="px-2 py-2 text-right font-semibold">変動費</th><th className="px-2 py-2 text-right font-semibold">年間利益</th><th className="px-2 py-2 text-right font-semibold">表面利回り</th><th className="px-2 py-2 text-right font-semibold">実質利回り</th><th className="px-2 py-2 text-right font-semibold">投資回収</th></tr></thead>
+            <thead><tr className="bg-slate-50 text-gray-500"><th className="px-2 py-2 font-semibold">稼働率</th><th className="px-2 py-2 text-right font-semibold">日数</th><th className="px-2 py-2 text-right font-semibold">売上</th><th className="px-2 py-2 text-right font-semibold">月平均売上</th><th className="px-2 py-2 text-right font-semibold">OTA手数料</th><th className="px-2 py-2 text-right font-semibold">変動費</th><th className="px-2 py-2 text-right font-semibold">年間利益</th><th className="px-2 py-2 text-right font-semibold">月利益</th><th className="px-2 py-2 text-right font-semibold">投資回収</th></tr></thead>
             <tbody>{R.scenarios.map(s=><tr key={s.rate} className="border-t border-gray-50 hover:bg-blue-50/30">
               <td className="px-2 py-2 text-center font-bold">{s.rate}%</td>
               <td className="px-2 py-2 text-right">{s.minpaku.occupied}日</td>
-              <td className="px-2 py-2 text-right">{fmt(s.minpaku.stayRevenue)}円</td>
-              <td className="px-2 py-2 text-right text-green-600">{fmt(s.minpaku.cleaningRevenue)}円</td>
+              <td className="px-2 py-2 text-right">{fmt(s.minpaku.grossRevenue)}円</td>
+              <td className="px-2 py-2 text-right font-semibold text-violet-600">{fmt(Math.round(s.minpaku.grossRevenue/12))}円</td>
               <td className="px-2 py-2 text-right text-gray-500">-{fmt(s.minpaku.commission)}円</td>
-              <td className="px-2 py-2 text-right text-gray-500">-{fmt(s.minpaku.managementFee)}円</td>
               <td className="px-2 py-2 text-right text-gray-500">-{fmt(s.minpaku.totalVariableCost)}円</td>
               <td className={`px-2 py-2 text-right font-bold ${s.minpaku.profit>=0?"text-blue-600":"text-red-500"}`}>{fmt(s.minpaku.profit)}円</td>
-              <td className="px-2 py-2 text-right text-amber-600">{s.minpaku.grossYield?s.minpaku.grossYield.toFixed(1)+"%":"—"}</td>
-              <td className="px-2 py-2 text-right text-emerald-600 font-bold">{s.minpaku.netYield?s.minpaku.netYield.toFixed(1)+"%":"—"}</td>
+              <td className="px-2 py-2 text-right">{fmt(s.minpaku.monthlyProfit)}円</td>
               <td className="px-2 py-2 text-right text-gray-500">{s.minpaku.payback?fmtMonth(s.minpaku.payback*12):"—"}</td>
             </tr>)}</tbody>
           </table></div>
@@ -1118,18 +841,16 @@ ${R.exitStrategy.map(r=>{const m3=r.mult.find(x=>x.m===3);const m5=r.mult.find(x
         <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-5 mb-5">
           <div className="flex items-center gap-2 mb-3"><span className="w-3 h-3 bg-emerald-500 rounded-full" /><h3 className="text-sm font-bold text-gray-700">旅館業法（簡易宿所）</h3><span className="text-xs text-gray-400">年間365日</span></div>
           <div className="overflow-x-auto"><table className="w-full text-xs">
-            <thead><tr className="bg-slate-50 text-gray-500"><th className="px-2 py-2 font-semibold">稼働率</th><th className="px-2 py-2 text-right font-semibold">日数</th><th className="px-2 py-2 text-right font-semibold">宿泊料</th><th className="px-2 py-2 text-right font-semibold">清掃費収入</th><th className="px-2 py-2 text-right font-semibold">OTA手数料</th><th className="px-2 py-2 text-right font-semibold">運営代行費</th><th className="px-2 py-2 text-right font-semibold">変動費</th><th className="px-2 py-2 text-right font-semibold">年間利益</th><th className="px-2 py-2 text-right font-semibold">表面利回り</th><th className="px-2 py-2 text-right font-semibold">実質利回り</th><th className="px-2 py-2 text-right font-semibold">投資回収</th></tr></thead>
+            <thead><tr className="bg-slate-50 text-gray-500"><th className="px-2 py-2 font-semibold">稼働率</th><th className="px-2 py-2 text-right font-semibold">日数</th><th className="px-2 py-2 text-right font-semibold">売上</th><th className="px-2 py-2 text-right font-semibold">月平均売上</th><th className="px-2 py-2 text-right font-semibold">OTA手数料</th><th className="px-2 py-2 text-right font-semibold">変動費</th><th className="px-2 py-2 text-right font-semibold">年間利益</th><th className="px-2 py-2 text-right font-semibold">月利益</th><th className="px-2 py-2 text-right font-semibold">投資回収</th></tr></thead>
             <tbody>{R.scenarios.map(s=><tr key={s.rate} className="border-t border-gray-50 hover:bg-emerald-50/30">
               <td className="px-2 py-2 text-center font-bold">{s.rate}%</td>
               <td className="px-2 py-2 text-right">{s.ryokan.occupied}日</td>
-              <td className="px-2 py-2 text-right">{fmt(s.ryokan.stayRevenue)}円</td>
-              <td className="px-2 py-2 text-right text-green-600">{fmt(s.ryokan.cleaningRevenue)}円</td>
+              <td className="px-2 py-2 text-right">{fmt(s.ryokan.grossRevenue)}円</td>
+              <td className="px-2 py-2 text-right font-semibold text-violet-600">{fmt(Math.round(s.ryokan.grossRevenue/12))}円</td>
               <td className="px-2 py-2 text-right text-gray-500">-{fmt(s.ryokan.commission)}円</td>
-              <td className="px-2 py-2 text-right text-gray-500">-{fmt(s.ryokan.managementFee)}円</td>
               <td className="px-2 py-2 text-right text-gray-500">-{fmt(s.ryokan.totalVariableCost)}円</td>
               <td className={`px-2 py-2 text-right font-bold ${s.ryokan.profit>=0?"text-emerald-600":"text-red-500"}`}>{fmt(s.ryokan.profit)}円</td>
-              <td className="px-2 py-2 text-right text-amber-600">{s.ryokan.grossYield?s.ryokan.grossYield.toFixed(1)+"%":"—"}</td>
-              <td className="px-2 py-2 text-right text-emerald-600 font-bold">{s.ryokan.netYield?s.ryokan.netYield.toFixed(1)+"%":"—"}</td>
+              <td className="px-2 py-2 text-right">{fmt(s.ryokan.monthlyProfit)}円</td>
               <td className="px-2 py-2 text-right text-gray-500">{s.ryokan.payback?fmtMonth(s.ryokan.payback*12):"—"}</td>
             </tr>)}</tbody>
           </table></div>
@@ -1153,15 +874,11 @@ ${R.exitStrategy.map(r=>{const m3=r.mult.find(x=>x.m===3);const m5=r.mult.find(x
 
         <div className="bg-gray-50 rounded-xl p-4 mb-5 text-xs text-gray-500 space-y-1">
           <p className="font-semibold text-gray-600">計算前提</p>
-          <p className="font-semibold text-gray-700">物件想定 = {prop.layout} / 定員{prop.capacity}名 / 一棟貸し {fmt(prop.nightlyRate)}円/泊（1人あたり約{fmt(Math.round(N(prop.nightlyRate) / Math.max(N(prop.capacity), 1)))}円/泊）</p>
           <p>売上 = 宿泊料（稼働日数 x 宿泊単価）＋ ゲスト清掃費（ターン数 x {fmt(prop.guestCleaningFee)}円）</p>
           <p>OTA手数料 = 売上合計 x {prop.commissionRate}%</p>
-          <p>運営代行費 = （売上 - OTA手数料）x {prop.managementFeeRate}%</p>
           <p>変動費 = ターンオーバー回数 x（清掃費{fmt(prop.cleaningFee)}円 + リネン{fmt(prop.linenFee)}円 + 消耗品{fmt(prop.consumablesFee)}円）</p>
           <p>固定費 = {fmt(R.mFix)}円/月 x 12 = {fmt(R.aFix)}円/年</p>
-          <p>年間利益 = 売上 - OTA手数料 - 運営代行費 - 変動費 - 固定費</p>
-          <p>表面利回り = 年間売上（総収入）÷ 初期投資額 × 100</p>
-          <p>実質利回り = 年間利益（経費控除後）÷ 初期投資額 × 100</p>
+          <p>年間利益 = 売上 - OTA手数料 - 変動費 - 固定費</p>
         </div>
         <div className="flex justify-between">
           <button onClick={()=>setTab(0)} className="px-5 py-2 bg-gray-100 text-gray-600 rounded-lg text-xs font-semibold hover:bg-gray-200 transition">物件情報に戻る</button>
